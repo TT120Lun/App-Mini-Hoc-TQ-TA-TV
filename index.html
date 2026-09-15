@@ -492,6 +492,7 @@ function renderHistory() {
 
 // ---------- 8. WIRING GIAO DIỆN ----------
 $("btnLookup").onclick = lookupText;
+$("btnOcr").onclick = lookupImage;
 $("inputText").addEventListener("keydown", (e) => { if (e.key === "Enter") lookupText(); });
 
 $("tabText").onclick = () => switchTab("text");
