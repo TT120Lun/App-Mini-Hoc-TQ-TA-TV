@@ -405,7 +405,7 @@ function speak(text, lang) {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
-    u.rate = 0.95;
+    u.rate = 0.85;
     window.speechSynthesis.speak(u);
   } catch (e) {
     setStatus("Không đọc được: " + e.message, true);
