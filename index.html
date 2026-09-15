@@ -68,6 +68,9 @@
   .speak-btn{ flex-shrink:0; background:transparent; border:1px solid var(--line); color:var(--text); border-radius:4px; padding:4px 9px; font-size:14px; cursor:pointer; }
   .speak-btn:hover{ border-color:var(--vi); color:var(--vi); }
   .speak-btn:disabled{ opacity:0.35; cursor:default; }
+  .result-controls{ display:flex; justify-content:flex-end; margin-bottom:8px; }
+  .stop-btn{ font-family:var(--font-head); font-size:11px; padding:5px 10px; border-radius:4px; border:1px solid var(--zh); color:var(--zh); background:transparent; cursor:pointer; }
+  .stop-btn:hover{ background:var(--zh); color:#fff; }
 
   .history{ margin-top:32px; }
   .history-title{ font-family:var(--font-head); font-size:11px; letter-spacing:1px; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
@@ -107,15 +110,10 @@
   </div>
 
   <div class="panel" id="panelImage">
-    <div class="lang-pick">
-      <div class="eyebrow" style="align-self:center;">CHỮ TRONG ẢNH LÀ:</div>
-      <button class="lang-chip active" data-lang="vie">VI</button>
-      <button class="lang-chip" data-lang="eng">EN</button>
-      <button class="lang-chip" data-lang="chi_sim">ZH</button>
-    </div>
     <label class="dropzone" id="dropzone">
       <div style="font-size:22px;">📷</div>
       <div>Chọn hoặc chụp ảnh chứa chữ cần tra</div>
+      <div style="font-size:11px; margin-top:2px;">Tự nhận diện Việt · Anh · Trung</div>
       <input type="file" accept="image/*" id="fileInput" style="display:none;">
     </label>
     <div id="previewWrap" style="display:none;" class="preview-wrap">
@@ -135,8 +133,8 @@
   </div>
 
   <p class="footnote">
-    Gõ chữ: app tự nhận diện Việt/Anh/Trung rồi dịch ra 2 ngôn ngữ còn lại — dịch bằng dịch vụ miễn phí (không dùng AI Claude), có thể chưa sát nghĩa chuyên ngành với thuật ngữ quan trọng.<br>
-    Tải ảnh: chọn đúng ngôn ngữ chữ trong ảnh (VI/EN/ZH) để đọc chính xác hơn; lần đầu cần vài chục giây tải bộ nhận diện, hãy chờ mạng ổn định.
+    Gõ chữ và tải ảnh: app tự nhận diện Việt/Anh/Trung rồi dịch ra 2 ngôn ngữ còn lại — dịch bằng dịch vụ miễn phí (không dùng AI Claude), có thể chưa sát nghĩa chuyên ngành với thuật ngữ quan trọng.<br>
+    Lần đầu tải ảnh cần vài chục giây để tải bộ nhận diện chữ; hãy chờ mạng ổn định.
   </p>
 </div>
 
@@ -360,8 +358,8 @@ async function lookupText() {
 
 // ---------- 6. TRA TỪ (HÌNH THỨC 2: TẢI ẢNH + OCR) ----------
 let pickedFile = null;
-let pickedLang = "vie"; // vie | eng | chi_sim
 let tesseractLoaded = false;
+const OCR_LANGS = "vie+eng+chi_sim"; // đọc gộp cả 3 ngôn ngữ, không cần chọn trước
 const TESSERACT_CDNS = [
   "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
   "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js",
@@ -392,8 +390,6 @@ async function loadTesseractOnce() {
   throw new Error("Không tải được bộ đọc ảnh (mạng có thể đang chặn CDN): " + (lastErr && lastErr.message));
 }
 
-const OCR_SRC_MAP = { vie: "vi", eng: "en", chi_sim: "zh" };
-
 async function lookupImage() {
   if (!pickedFile) return;
   $("btnOcr").disabled = true;
@@ -401,13 +397,14 @@ async function lookupImage() {
   try {
     setStatus("Đang tải bộ nhận diện chữ (chỉ lần đầu, cần vài chục giây)...");
     await loadTesseractOnce();
-    setStatus("Đang đọc chữ trong ảnh...");
-    const { data } = await Tesseract.recognize(pickedFile, pickedLang);
+    setStatus("Đang đọc chữ trong ảnh (Việt/Anh/Trung)...");
+    const { data } = await Tesseract.recognize(pickedFile, OCR_LANGS);
     const rawText = (data.text || "").trim();
     if (!rawText) throw new Error("không nhận ra chữ nào trong ảnh — thử ảnh rõ nét, ít góc nghiêng hơn");
 
-    setStatus("Đang dịch: “" + rawText.slice(0, 40) + (rawText.length > 40 ? "…" : "") + "”");
-    const item = await buildItem(rawText, OCR_SRC_MAP[pickedLang]);
+    const src = detectLang(rawText);
+    setStatus("Đang dịch (" + src.toUpperCase() + "): “" + rawText.slice(0, 40) + (rawText.length > 40 ? "…" : "") + "”");
+    const item = await buildItem(rawText, src);
     showResult(item);
     addToHistory(item);
     setStatus("");
@@ -454,6 +451,7 @@ function resultRow(field, label, text, pinyin) {
 function showResult(item) {
   currentItem = item;
   resultBox.innerHTML =
+    '<div class="result-controls"><button class="stop-btn" id="btnStopSpeak">⏹ Dừng đọc</button></div>' +
     resultRow("vi", "VI", item.vi) +
     resultRow("en", "EN", item.en) +
     resultRow("zh", "ZH", item.zh, item.pinyin);
@@ -461,6 +459,10 @@ function showResult(item) {
 }
 
 resultBox.addEventListener("click", (e) => {
+  if (e.target.closest("#btnStopSpeak")) {
+    window.speechSynthesis && window.speechSynthesis.cancel();
+    return;
+  }
   const btn = e.target.closest(".speak-btn");
   if (!btn || !currentItem) return;
   const field = btn.dataset.field;
@@ -505,14 +507,6 @@ function switchTab(t) {
   setStatus("");
   resultBox.style.display = "none";
 }
-
-document.querySelectorAll(".lang-chip").forEach((chip) => {
-  chip.onclick = () => {
-    document.querySelectorAll(".lang-chip").forEach((c) => c.classList.remove("active"));
-    chip.classList.add("active");
-    pickedLang = chip.dataset.lang;
-  };
-});
 
 $("dropzone").onclick = () => $("fileInput").click();
 $("fileInput").addEventListener("change", (e) => {
