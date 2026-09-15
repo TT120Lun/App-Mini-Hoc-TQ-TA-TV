@@ -135,8 +135,8 @@
   </div>
 
   <p class="footnote">
-    Dịch bằng dịch vụ dịch miễn phí (không dùng AI Claude, không tốn phí) — có thể đôi khi dịch chưa sát nghĩa chuyên ngành, bạn nên kiểm tra lại với thuật ngữ kỹ thuật quan trọng.<br>
-    Đọc chữ trong ảnh cần vài giây để tải bộ nhận diện lần đầu; hãy chờ mạng ổn định.
+    Gõ chữ: app tự nhận diện Việt/Anh/Trung rồi dịch ra 2 ngôn ngữ còn lại — dịch bằng dịch vụ miễn phí (không dùng AI Claude), có thể chưa sát nghĩa chuyên ngành với thuật ngữ quan trọng.<br>
+    Tải ảnh: chọn đúng ngôn ngữ chữ trong ảnh (VI/EN/ZH) để đọc chính xác hơn; lần đầu cần vài chục giây tải bộ nhận diện, hãy chờ mạng ổn định.
   </p>
 </div>
 
@@ -315,6 +315,29 @@ function toPinyin(zhText) {
   }
 }
 
+// Nhận diện nhanh: chữ Hán -> zh, có dấu tiếng Việt -> vi, còn lại -> en.
+function detectLang(text) {
+  if (/[\u4e00-\u9fff]/.test(text)) return "zh";
+  if (/[àáạảãăằắặẳẵâầấậẩẫđèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ]/i.test(text)) return "vi";
+  return "en";
+}
+
+// Dịch 1 đoạn text theo ngôn ngữ nguồn đã biết (hoặc đã nhận diện) ra 2 ngôn ngữ còn lại.
+async function buildItem(text, srcLang) {
+  let vi, en, zh;
+  if (srcLang === "vi") {
+    vi = text;
+    [en, zh] = await Promise.all([translateOne(text, "vi", "en"), translateOne(text, "vi", "zh-CN")]);
+  } else if (srcLang === "en") {
+    en = text;
+    [vi, zh] = await Promise.all([translateOne(text, "en", "vi"), translateOne(text, "en", "zh-CN")]);
+  } else {
+    zh = text;
+    [vi, en] = await Promise.all([translateOne(text, "zh-CN", "vi"), translateOne(text, "zh-CN", "en")]);
+  }
+  return { vi, en, zh, pinyin: toPinyin(zh), ts: Date.now() };
+}
+
 // ---------- 5. TRA TỪ (HÌNH THỨC 1: GÕ CHỮ) ----------
 async function lookupText() {
   const term = $("inputText").value.trim();
@@ -323,11 +346,8 @@ async function lookupText() {
   setStatus("Đang dịch...");
   resultBox.style.display = "none";
   try {
-    const [en, zh] = await Promise.all([
-      translateOne(term, "vi", "en"),
-      translateOne(term, "vi", "zh-CN"),
-    ]);
-    const item = { vi: term, en, zh, pinyin: toPinyin(zh), ts: Date.now() };
+    const src = detectLang(term);
+    const item = await buildItem(term, src);
     showResult(item);
     addToHistory(item);
     setStatus("");
@@ -342,51 +362,52 @@ async function lookupText() {
 let pickedFile = null;
 let pickedLang = "vie"; // vie | eng | chi_sim
 let tesseractLoaded = false;
+const TESSERACT_CDNS = [
+  "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+  "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js",
+];
 
-function loadTesseractOnce() {
-  if (tesseractLoaded) return Promise.resolve();
+function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    s.onload = () => { tesseractLoaded = true; resolve(); };
-    s.onerror = () => reject(new Error("Không tải được bộ đọc ảnh (kiểm tra mạng)"));
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("CDN lỗi: " + src));
     document.body.appendChild(s);
   });
 }
+
+async function loadTesseractOnce() {
+  if (tesseractLoaded) return;
+  let lastErr;
+  for (const src of TESSERACT_CDNS) {
+    try {
+      await loadScriptOnce(src);
+      tesseractLoaded = true;
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error("Không tải được bộ đọc ảnh (mạng có thể đang chặn CDN): " + (lastErr && lastErr.message));
+}
+
+const OCR_SRC_MAP = { vie: "vi", eng: "en", chi_sim: "zh" };
 
 async function lookupImage() {
   if (!pickedFile) return;
   $("btnOcr").disabled = true;
   resultBox.style.display = "none";
   try {
-    setStatus("Đang tải bộ nhận diện chữ (chỉ lần đầu)...");
+    setStatus("Đang tải bộ nhận diện chữ (chỉ lần đầu, cần vài chục giây)...");
     await loadTesseractOnce();
     setStatus("Đang đọc chữ trong ảnh...");
     const { data } = await Tesseract.recognize(pickedFile, pickedLang);
     const rawText = (data.text || "").trim();
-    if (!rawText) throw new Error("không nhận ra chữ nào trong ảnh");
+    if (!rawText) throw new Error("không nhận ra chữ nào trong ảnh — thử ảnh rõ nét, ít góc nghiêng hơn");
 
-    setStatus("Đang dịch...");
-    let item;
-    if (pickedLang === "vie") {
-      const [en, zh] = await Promise.all([
-        translateOne(rawText, "vi", "en"),
-        translateOne(rawText, "vi", "zh-CN"),
-      ]);
-      item = { vi: rawText, en, zh, pinyin: toPinyin(zh), ts: Date.now() };
-    } else if (pickedLang === "eng") {
-      const [vi, zh] = await Promise.all([
-        translateOne(rawText, "en", "vi"),
-        translateOne(rawText, "en", "zh-CN"),
-      ]);
-      item = { vi, en: rawText, zh, pinyin: toPinyin(zh), ts: Date.now() };
-    } else {
-      const [vi, en] = await Promise.all([
-        translateOne(rawText, "zh-CN", "vi"),
-        translateOne(rawText, "zh-CN", "en"),
-      ]);
-      item = { vi, en, zh: rawText, pinyin: toPinyin(rawText), ts: Date.now() };
-    }
+    setStatus("Đang dịch: “" + rawText.slice(0, 40) + (rawText.length > 40 ? "…" : "") + "”");
+    const item = await buildItem(rawText, OCR_SRC_MAP[pickedLang]);
     showResult(item);
     addToHistory(item);
     setStatus("");
@@ -481,6 +502,7 @@ function switchTab(t) {
   $("panelText").classList.toggle("active", t === "text");
   $("panelImage").classList.toggle("active", t === "image");
   setStatus("");
+  resultBox.style.display = "none";
 }
 
 document.querySelectorAll(".lang-chip").forEach((chip) => {
@@ -496,6 +518,8 @@ $("fileInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   pickedFile = file;
+  resultBox.style.display = "none";
+  setStatus("");
   const reader = new FileReader();
   reader.onload = () => {
     $("previewImg").src = reader.result;
