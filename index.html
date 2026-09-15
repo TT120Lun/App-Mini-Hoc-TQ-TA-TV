@@ -63,8 +63,11 @@
   .tag.vi{ color:var(--vi); border-color:var(--vi); }
   .tag.en{ color:var(--en); border-color:var(--en); }
   .tag.zh{ color:var(--zh); border-color:var(--zh); }
-  .row .val{ font-size:17px; }
+  .row .val{ font-size:17px; flex:1; min-width:0; }
   .pinyin{ font-family:var(--font-head); font-size:12px; color:var(--muted); margin-left:8px; }
+  .speak-btn{ flex-shrink:0; background:transparent; border:1px solid var(--line); color:var(--text); border-radius:4px; padding:4px 9px; font-size:14px; cursor:pointer; }
+  .speak-btn:hover{ border-color:var(--vi); color:var(--vi); }
+  .speak-btn:disabled{ opacity:0.35; cursor:default; }
 
   .history{ margin-top:32px; }
   .history-title{ font-family:var(--font-head); font-size:11px; letter-spacing:1px; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
@@ -389,15 +392,53 @@ async function lookupImage() {
 }
 
 // ---------- 7. HIỂN THỊ KẾT QUẢ + LỊCH SỬ ----------
+const SPEAK_LANG = { vi: "vi-VN", en: "en-US", zh: "zh-CN" };
+let currentItem = null;
+
+function speak(text, lang) {
+  if (!text) return;
+  if (!("speechSynthesis" in window)) {
+    setStatus("Trình duyệt này không hỗ trợ đọc chữ.", true);
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  } catch (e) {
+    setStatus("Không đọc được: " + e.message, true);
+  }
+}
+
+function resultRow(field, label, text, pinyin) {
+  return (
+    '<div class="row">' +
+    '<span class="tag ' + field + '">' + label + '</span>' +
+    '<span class="val">' + escapeHtml(text) +
+      (pinyin ? '<span class="pinyin">' + escapeHtml(pinyin) + '</span>' : '') +
+    '</span>' +
+    '<button class="speak-btn" data-field="' + field + '" title="Đọc to">🔊</button>' +
+    '</div>'
+  );
+}
+
 function showResult(item) {
+  currentItem = item;
   resultBox.innerHTML =
-    '<div class="row"><span class="tag vi">VI</span><span class="val">' + escapeHtml(item.vi) + '</span></div>' +
-    '<div class="row"><span class="tag en">EN</span><span class="val">' + escapeHtml(item.en) + '</span></div>' +
-    '<div class="row"><span class="tag zh">ZH</span><span class="val">' + escapeHtml(item.zh) +
-      (item.pinyin ? '<span class="pinyin">' + escapeHtml(item.pinyin) + '</span>' : '') +
-    '</span></div>';
+    resultRow("vi", "VI", item.vi) +
+    resultRow("en", "EN", item.en) +
+    resultRow("zh", "ZH", item.zh, item.pinyin);
   resultBox.style.display = "block";
 }
+
+resultBox.addEventListener("click", (e) => {
+  const btn = e.target.closest(".speak-btn");
+  if (!btn || !currentItem) return;
+  const field = btn.dataset.field;
+  speak(currentItem[field], SPEAK_LANG[field]);
+});
 
 function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
